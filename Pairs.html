@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pairs</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+body { height: 100dvh; }
+<style>
+  * { box-sizing: border-box; }
+  body { 
+    margin: 0; 
+    font-family: -apple-system, sans-serif; 
+    background: #1a365d; 
+    color: #fff; 
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  .screen { display: none; width: 100%; height: 100%; }
+  .screen.visible { display: flex; flex-direction: column; }
+
+  /* HEADER */
+  #game-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 16px; background: #0d2440; height: 50px; flex-shrink: 0;
+  }
+  #game-header button {
+    background: #f6ad55; color: #1a365d; border: none;
+    padding: 8px 16px; border-radius: 6px; font-weight: bold; cursor: pointer;
+  }
+  #timer { font-size: 24px; font-weight: bold; font-family: monospace; }
+
+  /* GAME BOARD CONTAINER */
+  #game-board {
+    position: relative;
+    flex: 1;
+    margin: 10px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #e0e0e0; /* fallback if no image */
+  }
+  #photo-layer {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    filter: blur(8px) brightness(0.6);
+    z-index: 1;
+    transition: filter 0.3s ease;
+  }
+  #tile-grid {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    gap: 6px;
+    padding: 6px;
+    z-index: 2; /* tiles ABOVE photo */
+  }
+
+  /* TILES */
+  .tile {
+    background: linear-gradient(135deg, #e53e3e, #c53030);
+    border-radius: 8px;
+    color: #fff;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .tile.number { background: linear-gradient(135deg, #3182ce, #2c5282); }
+  .tile.selected { outline: 4px solid #f6ad55; }
+  .tile.matched { visibility: hidden; }
+  .tile.wrong { animation: shake 0.3s; }
+  @keyframes shake { 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+
+  /* MENU SCREEN */
+  #menu { align-items: center; justify-content: center; text-align: center; }
+  #menu h1 { font-size: 48px; margin-bottom: 20px; }
+  #photo-picker {
+    margin-bottom: 30px;
+    padding: 15px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 10px;
+  }
+  #photo-picker label { margin-right: 10px; font-size: 18px; }
+  #level-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: center;
+    max-width: 800px;
+    padding: 0 20px 20px;
+  }
+  .level-btn {
+    width: 100px; height: 100px;
+    border: none; border-radius: 10px;
+    background: linear-gradient(135deg, #e53e3e, #c53030);
+    color: #fff; font-size: 15px; font-weight: bold;
+    cursor: pointer; position: relative;
+    transition: transform 0.2s;
+  }
+  .level-btn:hover { transform: scale(1.05); }
+  .level-btn small { 
+    position: absolute; bottom: 6px; right: 8px; 
+    font-size: 11px; opacity: 0.85; font-weight: normal;
+  }
+
+  /* WIN OVERLAY */
+  #win-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 10;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+  }
+  #win-overlay.visible { display: flex; }
+  #win-overlay button {
+    margin-top: 15px;
+    padding: 12px 28px;
+    font-size: 18px;
+    background: #f6ad55;
+    color: #1a365d;
+    border: none;
+    border-radius: 8px;
+    font-weight: bold;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<!-- MENU SCREEN -->
+<div id="menu" class="screen visible">
+  <h1>🧮 Pairs</h1>
+  
+  <div id="photo-picker">
+    <label for="photo-input">Choose hidden picture:</label>
+    <input type="file" id="photo-input" accept="image/*">
+    <span id="photo-name" style="margin-left:10px;font-style:italic;color:#aaa;"></span>
+  </div>
+  
+  <div id="level-grid"></div>
+</div>
+
+<!-- GAME SCREEN -->
+<div id="game" class="screen">
+  <div id="game-header">
+    <button onclick="goHome()">← Menu</button>
+    <div id="timer">00:00</div>
+    <div id="pairs-left"></div>
+  </div>
+  
+  <div id="game-board">
+    <div id="photo-layer"></div>
+    <div id="tile-grid"></div>
+    <div id="win-overlay">
+      <div>🎉 Level Complete!</div>
+      <div id="final-time"></div>
+      <button onclick="replay()">Replay</button>
+      <button onclick="goHome()">Main Menu</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentLevel = 1, tiles = [], pairsLeft = 0, selIdx = null;
+let startTime = 0, timerInterval = null, bgImageDataUrl = null;
+let bestTimes = JSON.parse(localStorage.getItem('pairs_bestTimes') || '{}');
+
+// ── YOUR ORIGINAL 2014 LEVEL TABLE ──
+function levelConfig(lvl) {
+  const c = { nAdd:0, nSub:0, nMult:0, nDiv:0, maxAdd:9, maxSub:9, maxMult:6, maxDiv:6 };
+  switch(lvl) {
+    case 1: c.nAdd=10;break;
+    case 2: c.nSub=10;break;
+    case 3: c.nMult=10;break;
+    case 4: c.nDiv=10;break;
+    case 5: c.nAdd=3;c.nSub=2;c.nMult=3;c.nDiv=2;c.maxMult=6;c.maxDiv=6;break;
+    case 6: c.nAdd=10;c.maxAdd=49;break;
+    case 7: c.nSub=10;c.maxSub=49;break;
+    case 8: c.nMult=10;c.maxMult=12;break;
+    case 9: c.nDiv=10;c.maxDiv=12;break;
+    case 10: c.nAdd=3;c.nSub=2;c.nMult=3;c.nDiv=2;c.maxAdd=49;c.maxSub=49;c.maxMult=12;c.maxDiv=12;break;
+    case 11: c.nAdd=21;break;
+    case 12: c.nSub=21;break;
+    case 13: c.nMult=21;c.maxMult=6;break;
+    case 14: c.nDiv=21;c.maxDiv=6;break;
+    case 15: c.nAdd=5;c.nSub=5;c.nMult=6;c.nDiv=5;c.maxMult=6;c.maxDiv=6;break;
+    case 16: c.nAdd=21;c.maxAdd=49;break;
+    case 17: c.nSub=21;c.maxSub=49;break;
+    case 18: c.nMult=21;c.maxMult=12;break;
+    case 19: c.nDiv=21;c.maxDiv=12;break;
+    case 20: c.nAdd=5;c.nSub=5;c.nMult=6;c.nDiv=5;c.maxAdd=49;c.maxSub=49;c.maxMult=12;c.maxDiv=12;break;
+    case 21: c.nAdd=36;c.maxAdd=99;break;
+    case 22: c.nSub=36;c.maxSub=99;break;
+    case 23: c.nMult=36;c.maxMult=20;break;
+    case 24: c.nDiv=36;c.maxDiv=20;break;
+    case 25: c.nAdd=9;c.nSub=9;c.nMult=9;c.nDiv=9;c.maxAdd=99;c.maxSub=99;c.maxMult=20;c.maxDiv=20;break;
+  }
+  return c;
+}
+
+function rnd(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
+
+function makeTiles(lvl) {
+  const c = levelConfig(lvl);
+  tiles = [];
+  
+  // Addition
+  for(let i=0; i<c.nAdd; i++) {
+    const a=rnd(1,c.maxAdd), b=rnd(1,c.maxAdd);
+    tiles.push({ text:`${a} + ${b}`, value:a+b, isNumber:false, cleared:false });
+    tiles.push({ text:String(a+b), value:a+b, isNumber:true, cleared:false });
+  }
+  // Subtraction
+  for(let i=0; i<c.nSub; i++) {
+    const a=rnd(1,c.maxSub), b=rnd(1,c.maxSub);
+    const hi=Math.max(a,b), lo=Math.min(a,b);
+    tiles.push({ text:`${hi} − ${lo}`, value:hi-lo, isNumber:false, cleared:false });
+    tiles.push({ text:String(hi-lo), value:hi-lo, isNumber:true, cleared:false });
+  }
+  // Multiplication
+  for(let i=0; i<c.nMult; i++) {
+    const a=rnd(1,c.maxMult), b=rnd(1,c.maxMult);
+    tiles.push({ text:`${a} × ${b}`, value:a*b, isNumber:false, cleared:false });
+    tiles.push({ text:String(a*b), value:a*b, isNumber:true, cleared:false });
+  }
+  // Division (ensure integer result)
+  for(let i=0; i<c.nDiv; i++) {
+    const a=rnd(1,c.maxDiv), b=rnd(1,c.maxDiv);
+    const prod=a*b;
+    tiles.push({ text:`${prod} ÷ ${a}`, value:b, isNumber:false, cleared:false });
+    tiles.push({ text:String(b), value:b, isNumber:true, cleared:false });
+  }
+  
+  // Shuffle
+  for(let i=tiles.length-1; i>0; i--) {
+    const j=Math.floor(Math.random()*(i+1));
+    [tiles[i],tiles[j]] = [tiles[j],tiles[i]];
+  }
+  
+  pairsLeft = tiles.length / 2;
+}
+
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('visible'));
+  document.getElementById(id).classList.add('visible');
+}
+
+function startLevel(lvl) {
+  currentLevel = lvl; selIdx = null;
+  makeTiles(lvl);
+  showScreen('game');
+
+  // Apply background image
+  const layer = document.getElementById('photo-layer');
+  if(bgImageDataUrl) {
+    layer.style.backgroundImage = `url('${bgImageDataUrl}')`;
+    layer.style.filter = 'blur(8px) brightness(0.6)';
+    layer.style.display = 'block';
+  } else {
+    layer.style.backgroundImage = 'none';
+    layer.style.backgroundColor = '#e0e0e0';
+    layer.style.filter = 'none';
+    layer.style.display = 'block';
+  }
+
+  // Build tile grid
+  const grid = document.getElementById('tile-grid');
+  grid.innerHTML = '';
+  
+  const cols = Math.ceil(Math.sqrt(tiles.length));
+  const rows = Math.ceil(tiles.length / cols);
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  grid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+
+  tiles.forEach((tile,i)=>{
+    const el=document.createElement('div');
+    el.className='tile'+(tile.isNumber?' number':'');
+    el.textContent=tile.text;
+    el.onclick=()=>clickTile(i,el);
+    grid.appendChild(el);
+  });
+
+  updateHUD();
+  clearInterval(timerInterval);
+  startTime=Date.now();
+  timerInterval=setInterval(()=>{
+    const elapsed=Date.now()-startTime;
+    document.getElementById('timer').textContent=
+      new Date(elapsed).toISOString().substring(14,19);
+  },250);
+}
+
+function clickTile(idx, el) {
+  if(tiles[idx].cleared) return;
+  if(selIdx===null) { selIdx=idx; el.classList.add('selected'); return; }
+  if(selIdx===idx) { el.classList.remove('selected'); selIdx=null; return; }
+
+  const first=tiles[selIdx], second=tiles[idx];
+  const match=(first.value===second.value && first.isNumber!==second.isNumber);
+  const firstEl=document.querySelectorAll('.tile')[selIdx];
+  
+  firstEl.classList.remove('selected');
+
+  if(match) {
+    first.cleared=second.cleared=true;
+    firstEl.classList.add('matched');
+    el.classList.add('matched');
+    pairsLeft--;
+    
+    // Sharpen photo progressively
+    const progress=1-(pairsLeft/(tiles.length/2));
+    const layer=document.getElementById('photo-layer');
+    layer.style.filter=`blur(${8*(1-progress)}px) brightness(${0.6+0.4*progress})`;
+    
+    updateHUD();
+    if(pairsLeft===0) win();
+  } else {
+    el.classList.add('wrong');
+    setTimeout(()=>el.classList.remove('wrong'),350);
+  }
+  selIdx=null;
+}
+
+function updateHUD() { document.getElementById('pairs-left').textContent=`Pairs left: ${pairsLeft}`; }
+
+function win() {
+  clearInterval(timerInterval);
+  const elapsed=Date.now()-startTime;
+  if(!bestTimes[currentLevel] || elapsed<bestTimes[currentLevel]) {
+    bestTimes[currentLevel]=elapsed;
+    localStorage.setItem('pairs_bestTimes',JSON.stringify(bestTimes));
+  }
+  document.getElementById('final-time').textContent=`Time: ${(elapsed/1000).toFixed(1)}s`;
+  document.getElementById('win-overlay').classList.add('visible');
+}
+
+function replay() {
+  document.getElementById('win-overlay').classList.remove('visible');
+  startLevel(currentLevel);
+}
+
+function goHome() {
+  clearInterval(timerInterval);
+  document.getElementById('win-overlay').classList.remove('visible');
+  buildMenu();
+  showScreen('menu');
+}
+
+function fmt(ms) { return new Date(ms).toISOString().substring(14,19); }
+
+function buildMenu() {
+  const grid=document.getElementById('level-grid');
+  grid.innerHTML='';
+  for(let l=1;l<=25;l++){
+    const btn=document.createElement('button');
+    btn.className='level-btn';
+    btn.textContent='Level '+l;
+    if(bestTimes[l]) btn.innerHTML+=`<small>${fmt(bestTimes[l])}</small>`;
+    btn.onclick=()=>startLevel(l);
+    grid.appendChild(btn);
+  }
+}
+
+// Photo picker handler
+document.getElementById('photo-input').addEventListener('change', e=>{
+  const file=e.target.files[0];
+  if(!file) return;
+  
+  document.getElementById('photo-name').textContent=file.name;
+  
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    bgImageDataUrl=ev.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+// Initialize
+buildMenu();
+</script>
+</body>
+</html>
